@@ -8,7 +8,7 @@ const USER = process.env.BET_USER;
 const PASS = process.env.BET_PASS;
 
 async function iniciarRobo() {
-  console.log('🤖 [ROBÔ AVANÇADO] Iniciando extração profunda de elementos...');
+  console.log('🤖 [ROBÔ NETWORK SNIFFER] Iniciando interceptação de rede e dados...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -24,6 +24,22 @@ async function iniciarRobo() {
   const page = await browser.newPage();
   await page.setViewport({ width: 1366, height: 768 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+
+  // Intercepta todas as requisições de rede e respostas JSON do jogo em tempo real
+  page.on('response', async (response) => {
+    try {
+      const url = response.url();
+      // Monitora chamadas de API ou dados de estado do jogo
+      if (response.headers()['content-type'] && response.headers()['content-type'].includes('application/json')) {
+        const json = await response.json().catch(() => null);
+        if (json) {
+          analisarDadosDoJogo(json);
+        }
+      }
+    } catch (e) {
+      // Ignora erros de parsing em arquivos estáticos
+    }
+  });
 
   try {
     console.log('🌐 Acessando a mesa de apostas...');
@@ -53,70 +69,95 @@ async function iniciarRobo() {
     }
 
   } catch (e) {
-    console.log('⚠️ Aviso no fluxo de sessão:', e.message);
+    console.log('⚠️ Aviso no fluxo:', e.message);
   }
 
-  // Monitoramento contínuo buscando em todos os atributos e elementos possíveis
-  setInterval(async () => {
-    try {
-      const dadosCapturados = await page.evaluate(() => {
-        const resultado = {
-          bolas: [],
-          jackpots: []
-        };
-
-        // Varre absolutamente tudo na página (incluindo atributos de texto ocultos e aria-labels)
-        const todosElementos = document.querySelectorAll('*');
-        todosElementos.forEach(el => {
-          // Coleta textos visíveis e atributos que possam guardar o número da bola
-          const textosParaVerificar = [];
-          if (el.innerText) textosParaVerificar.push(el.innerText.trim());
-          if (el.getAttribute('aria-label')) textosParaVerificar.push(el.getAttribute('aria-label').trim());
-          if (el.className && typeof el.className === 'string') textosParaVerificar.push(el.className);
-
-          textosParaVerificar.forEach(txt => {
-            const txtLower = txt.toLowerCase();
-
-            // Jackpots
-            if (txtLower.includes('major') && !resultado.jackpots.includes('MAJOR')) resultado.jackpots.push('MAJOR');
-            if (txtLower.includes('grand') && !resultado.jackpots.includes('GRAND')) resultado.jackpots.push('GRAND');
-            if (txtLower.includes('mega') && !resultado.jackpots.includes('MEGA')) resultado.jackpots.push('MEGA');
-
-            // Extrai números isolados ou de classes (ex: ball-54, number_12)
-            const matches = txt.match(/\d+/g);
-            if (matches) {
-              matches.forEach(m => {
-                const num = parseInt(m);
-                if (num >= 1 && num <= 100 && !resultado.bolas.includes(num)) {
-                  resultado.bolas.push(num);
-                }
-              });
-            }
-          });
-        });
-
-        return resultado;
+  // Intercepta também mensagens trocadas via WebSocket dentro da página do jogo
+  await page.evaluateOnNewDocument(() => {
+    const OrigWebSocket = window.WebSocket;
+    window.WebSocket = function(url, protocols) {
+      const ws = new OrigWebSocket(url, protocols);
+      ws.addEventListener('message', function(event) {
+        try {
+          // Dispara um evento customizado para o Puppeteer capturar o pacote WebSocket
+          window.postMessage({ type: 'WS_DATA', data: event.data }, '*');
+        } catch (err) {}
       });
+      return ws;
+    };
+  });
 
-      if ((dadosCapturados.bolas && dadosCapturados.bolas.length > 0) || (dadosCapturados.jackpots && dadosCapturados.jackpots.length > 0)) {
-        console.log('🎯 Dados capturados com sucesso:', dadosCapturados);
-        
-        await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            bolas: dadosCapturados.bolas,
-            jackpots: dadosCapturados.jackpots,
-            horario: new Date().toISOString()
-          })
-        });
-      } else {
-        console.log('🔄 Monitorando rodada ao vivo (analisando elementos)...');
-      }
-    } catch (err) {
-      // Ignora pequenos erros de ciclo para manter rodando
+  // Escuta os dados capturados pelo WebSocket injetado
+  page.on('console', async (msg) => {
+    const text = msg.text();
+    if (text.startsWith('WS_SNIFF:')) {
+      try {
+        const payload = JSON.parse(text.replace('WS_SNIFF:', ''));
+        analisarDadosDoJogo(payload);
+      } catch (e) {}
     }
-  }, 6000);
+  });
+
+  await page.exposeFunction('notificarAPI', async (dados) => {
+    try {
+      console.log('🎯 [DADOS CAPTURADOS VIA REDE]:', dados);
+      await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bolas: dados.bolas || [],
+          jackpots: dados.jackpots || [],
+          horario: new Date().toISOString()
+        })
+      });
+    } catch (err) {
+      console.log('❌ Erro ao enviar para API do Render:', err.message);
+    }
+  });
+
+  // Injetando o ouvinte de mensagens do WebSocket na página
+  await page.evaluate(() => {
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'WS_DATA') {
+        console.log('WS_SNIFF:' + JSON.stringify(event.data.data));
+      }
+    });
+  });
+
+  console.log('🚀 Sniffer de rede ativo. Monitorando pacotes do jogo...');
+  
+  // Função auxiliar de análise de pacotes de dados
+  function analisarDadosDoJogo(obj) {
+    try {
+      const str = JSON.stringify(obj);
+      const bolasEncontradas = [];
+      const jackpotsEncontrados = [];
+
+      // Procura por jackpots no payload
+      const strLower = str.toLowerCase();
+      if (strLower.includes('major') && !jackpotsEncontrados.includes('MAJOR')) jackpotsEncontrados.push('MAJOR');
+      if (strLower.includes('grand') && !jackpotsEncontrados.includes('GRAND')) jackpotsEncontrados.push('GRAND');
+      if (strLower.includes('mega') && !jackpotsEncontrados.includes('MEGA')) jackpotsEncontrados.push('MEGA');
+
+      // Procura por números válidos de bolas (1 a 100) dentro do JSON do jogo
+      const matches = str.match(/\b([1-9][0-9]?|100)\b/g);
+      if (matches) {
+        matches.forEach(m => {
+          const num = parseInt(m);
+          if (num >= 1 && num <= 100 && !bolasEncontradas.includes(num)) {
+            bolasEncontradas.push(num);
+          }
+        });
+      }
+
+      if (bolasEncontradas.length > 0 || jackpotsEncontrados.length > 0) {
+        // Envia para a função exposta no Node
+        page.evaluate((b, j) => {
+          window.notificarAPI({ bolas: b, jackpots: j });
+        }, bolasEncontradas, jackpotsEncontrados).catch(() => {});
+      }
+    } catch (e) {}
+  }
 }
 
 iniciarRobo();
