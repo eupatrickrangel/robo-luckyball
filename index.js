@@ -78,7 +78,9 @@ async function iniciarRobo() {
       } else {
         console.log('🔄 Monitorando rodada ao vivo...');
       }
-    } czyn => {}
+    } catch (err) {
+      // Mantém o loop ativo sem travar
+    }
   }, 10000);
 }
 
