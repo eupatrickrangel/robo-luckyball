@@ -1,13 +1,14 @@
 {
   "name": "robo-luckyball",
   "version": "1.0.0",
-  "description": "Scraper Lucky Ball",
+  "description": "Robo extrator de dados de cassino ao vivo",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "node-fetch": "^2.6.7",
-    "puppeteer": "^22.0.0"
+    "puppeteer": "^22.2.0",
+    "tesseract.js": "^5.1.0"
   }
 }
