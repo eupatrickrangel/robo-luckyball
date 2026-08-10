@@ -1,11 +1,13 @@
 {
   "name": "robo-luckyball",
   "version": "1.0.0",
+  "description": "Scraper Lucky Ball",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "node-fetch": "^2.6.7"
+    "node-fetch": "^2.6.7",
+    "puppeteer": "^22.0.0"
   }
 }
