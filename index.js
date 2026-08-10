@@ -1,5 +1,6 @@
 const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
+const fs = require('fs');
 
 const API_URL = 'https://api-luckyball.onrender.com/api/rodada';
 const GAME_URL = 'https://www.1pra1.bet.br/'; 
@@ -7,59 +8,61 @@ const GAME_URL = 'https://www.1pra1.bet.br/';
 async function iniciarRobo() {
   console.log('🤖 Iniciando scraper no Railway...');
 
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--single-process'
-      ]
-    });
-  } catch (e) {
-    console.error('❌ Erro fatal ao abrir o navegador:', e.message);
-    return;
-  }
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--single-process'
+    ]
+  });
 
   const page = await browser.newPage();
-
-  // Define um User-Agent real para evitar bloqueios básicos de bot
+  await page.setViewport({ width: 1280, height: 800 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
   try {
     console.log('🌐 Acessando URL do jogo...');
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
     console.log('✅ Página carregada com sucesso!');
+
+    // Aguarda 8 segundos para garantir carregamento de scripts internos
+    await new Promise(r => setTimeout(r, 8000));
+
+    // Salva print e HTML para diagnóstico caso precise
+    await page.screenshot({ path: 'print_jogo.png' });
+    const htmlContent = await page.content();
+    console.log(`📄 Tamanho do HTML carregado: ${htmlContent.length} caracteres`);
+
   } catch (e) {
-    console.error('❌ Erro ao carregar a URL:', e.message);
+    console.error('❌ Erro ao carregar a página:', e.message);
   }
 
-  // Loop de varredura a cada 10 segundos
+  // Loop de varredura
   setInterval(async () => {
     try {
-      console.log('🔍 Procurando bolas na tela...');
-      
-      // Tenta extrair os dados e logar o que encontrou
+      console.log('🔍 Varrendo elementos da tela...');
+
       const bolas = await page.evaluate(() => {
-        const elementos = document.querySelectorAll('[class*="ball__number"]');
+        // Tenta buscar por múltiplos seletores comuns de números em jogos de loteria/sorteio
+        const seletores = '[class*="ball"], [class*="number"], [class*="numero"], [class*="sorteio"]';
+        const elementos = document.querySelectorAll(seletores);
+        
         if (!elementos || elementos.length === 0) return [];
 
         return Array.from(elementos)
           .map(el => parseInt(el.innerText.trim(), 10))
-          .filter(n => !isNaN(n));
+          .filter(n => !isNaN(n) && n >= 1 && n <= 60);
       });
 
-      console.log(`📊 Bolas encontradas no momento:`, bolas);
+      const bolasUnicas = [...new Set(bolas)];
+      console.log(`📊 Números detectados:`, bolasUnicas);
 
-      if (bolas.length > 0) {
+      if (bolasUnicas.length > 0) {
         const payload = {
-          bolas: [...new Set(bolas)],
+          bolas: bolasUnicas,
           horario: new Date().toISOString()
         };
 
@@ -69,13 +72,11 @@ async function iniciarRobo() {
           body: JSON.stringify(payload)
         });
 
-        console.log('🚀 Rodada enviada para a API! Status:', resposta.status);
-      } else {
-        console.log('⚠️ Nenhum número válido mapeado nesta varredura. Verificando novamente em breve...');
+        console.log('🚀 Rodada enviada com sucesso! Status:', resposta.status);
       }
 
     } catch (err) {
-      console.error('❌ Erro dentro do loop de varredura:', err.message);
+      console.error('❌ Erro no loop:', err.message);
     }
   }, 10000);
 }
