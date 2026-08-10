@@ -5,69 +5,38 @@ const { createWorker } = require('tesseract.js');
 const API_URL = 'https://api-luckyball.onrender.com/api/rodada';
 const GAME_URL = 'https://www.1pra1.bet.br/cassino-ao-vivo?act=prov%3APTSL&game=420019208&gn=Brazilian+Mega+Fire+Blaze+Lucky+Ball+Live'; 
 
-const USER = process.env.BET_USER;
-const PASS = process.env.BET_PASS;
+async function iniciarRoboLocal() {
+  console.log('🤖 [ROBÔ LOCAL] Iniciando navegador visível na sua máquina...');
 
-async function iniciarRobo() {
-  console.log('🤖 [ROBÔ COMPLETO - VISÃO OCR] Inicializando sistema de captura...');
-
-  // Inicializa o motor de OCR otimizado para português/inglês
   const worker = await createWorker('por');
 
+  // Abre o navegador visível para evitar bloqueios do cassino
   const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--single-process'
-    ]
+    headless: false, // Deixa a janela visível para você acompanhar
+    defaultViewport: null,
+    args: ['--start-maximized']
   });
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1366, height: 768 });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+  const pages = await browser.pages();
+  const page = pages[0] || await browser.newPage();
 
   try {
     console.log('🌐 Acessando a mesa de apostas...');
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    console.log('⚠️ [ATENÇÃO]: Faça o login manualmente na janela do navegador que se abriu, caso seja necessário.');
+    console.log('🚀 Assim que a mesa estiver aberta, o robô começará a ler a tela automaticamente.');
 
-    // Tratativa automática de login caso seja solicitada
-    const botoesLogin = await page.$$('button, a');
-    for (const btn of botoesLogin) {
-      const texto = await page.evaluate(el => el.innerText, btn);
-      if (texto && (texto.toLowerCase().includes('entrar') || texto.toLowerCase().includes('login'))) {
-        await btn.click().catch(() => {});
-        break;
-      }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    const inputs = await page.$$('input');
-    if (inputs.length >= 2 && USER && PASS) {
-      console.log('✍️ Injetando credenciais de acesso...');
-      await inputs[0].type(USER, { delay: 50 });
-      if (inputs[1]) await inputs[1].type(PASS, { delay: 50 });
-      await page.keyboard.press('Enter');
-      await new Promise(resolve => setTimeout(resolve, 8000));
-    }
   } catch (e) {
-    console.log('⚠️ Aviso no fluxo de login:', e.message);
+    console.log('⚠️ Erro ao acessar:', e.message);
   }
 
-  console.log('🚀 Sistema de monitoramento visual ativado com sucesso. Aguardando rodadas...');
   let ultimaAssinatura = '';
 
-  // Loop de varredura visual a cada 4 segundos
+  // Loop de leitura visual da sua tela local
   setInterval(async () => {
     try {
-      // Captura a tela atual do jogo (enxerga Canvas e logos estilizados como o MEGA)
       const screenshotBuffer = await page.screenshot({ type: 'png' });
-
-      // Extrai todo o texto visível na imagem usando OCR
       const ret = await worker.recognize(screenshotBuffer);
       const textoDetectado = ret.data.text || '';
       const lower = textoDetectado.toLowerCase();
@@ -75,12 +44,10 @@ async function iniciarRobo() {
       const bolas = [];
       const jackpots = [];
 
-      // Detecção de prêmios especiais e jackpots
       if (lower.includes('major') || lower.includes('maior')) jackpots.push('MAJOR');
       if (lower.includes('grand') || lower.includes('grande')) jackpots.push('GRAND');
       if (lower.includes('mega')) jackpots.push('MEGA');
 
-      // Extração de números válidos da mesa (1 a 100)
       const matches = textoDetectado.match(/\b([1-9][0-9]?|100)\b/g);
       if (matches) {
         matches.forEach(m => {
@@ -91,13 +58,12 @@ async function iniciarRobo() {
         });
       }
 
-      // Se encontrar dados válidos, empacota e envia para a API do seu app
       if (bolas.length > 0 || jackpots.length > 0) {
         const assinatura = JSON.stringify(bolas.sort()) + JSON.stringify(jackpots.sort());
 
         if (assinatura !== ultimaAssinatura) {
           ultimaAssinatura = assinatura;
-          console.log('🎯 [EVENTO CAPTURADO NA MESA] Bolas:', bolas, '| Jackpots:', jackpots);
+          console.log('🎯 [SUCESSO - CAPTURADO NA SUA TELA] Bolas:', bolas, '| Jackpots:', jackpots);
 
           await fetch(API_URL, {
             method: 'POST',
@@ -107,16 +73,14 @@ async function iniciarRobo() {
               jackpots,
               horario: new Date().toISOString()
             })
-          }).catch(err => console.log('❌ Erro ao enviar para API:', err.message));
+          }).catch(() => {});
         }
       } else {
-        console.log('🔄 Monitorando mesa ao vivo...');
+        console.log('🔄 Lendo o painel da mesa local...');
       }
 
-    } catch (err) {
-      // Mantém o loop rodando mesmo se houver instabilidade momentânea na página
-    }
+    } catch (err) {}
   }, 4000);
 }
 
-iniciarRobo();
+iniciarRoboLocal();
