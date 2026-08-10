@@ -2,10 +2,10 @@ const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
 
 const API_URL = 'https://api-luckyball.onrender.com/api/rodada';
-const GAME_URL = 'https://www.1pra1.bet.br/'; 
+const GAME_URL = 'https://www.1pra1.bet.br/cassino-ao-vivo?act=prov%3APTSL&game=420019208&gn=Brazilian+Mega+Fire+Blaze+Lucky+Ball+Live'; 
 
 async function iniciarRobo() {
-  console.log('🤖 Iniciando scraper com auto-clique no Railway...');
+  console.log('🤖 Iniciando scraper na mesa ao vivo...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -23,44 +23,42 @@ async function iniciarRobo() {
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
   try {
-    console.log('🌐 Acessando a página principal...');
+    console.log('🌐 Acessando a mesa específica do jogo...');
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    console.log('✅ Página principal carregada!');
+    console.log('✅ Mesa carregada com sucesso!');
 
-    // Aguarda 5 segundos para os elementos iniciais aparecerem
-    await new Promise(r => setTimeout(r, 5000));
-
-    // Tenta clicar em qualquer botão de "Entrar", "Jogar" ou no centro da tela para destravar o jogo
-    console.log('🖱️ Simulando clique inicial na tela...');
-    await page.mouse.click(683, 384); // Clica no centro da tela
-    await new Promise(r => setTimeout(r, 5000));
+    // Aguarda 10 segundos para o stream de vídeo e os painéis de números se conectarem
+    await new Promise(r => setTimeout(r, 10000));
 
   } catch (e) {
-    console.error('❌ Erro na preparação inicial:', e.message);
+    console.error('❌ Erro ao carregar a mesa:', e.message);
   }
 
   // Loop de varredura a cada 10 segundos
   setInterval(async () => {
     try {
-      console.log('🔍 Varrendo frames e elementos...');
+      console.log('🔍 Varrendo painel da mesa ao vivo...');
 
       const bolas = await page.evaluate(() => {
         let resultados = [];
 
         const extrairDeDoc = (doc) => {
-          // Busca por todos os elementos de texto curto que pareçam números de 1 a 60
-          const nodes = doc.querySelectorAll('span, div, p, strong, b');
+          // Busca elementos de texto que representam os números sorteados na interface do jogo
+          const nodes = doc.querySelectorAll('span, div, p, [class*="ball"], [class*="number"], [class*="cell"]');
           nodes.forEach(el => {
             const texto = el.innerText ? el.innerText.trim() : '';
             const num = parseInt(texto, 10);
-            if (!isNaN(num) && num >= 1 && num <= 60 && texto.length <= 2) {
+            // Números da roleta/bingo costumam variar de 1 a 100 dependendo da variante
+            if (!isNaN(num) && num >= 1 && num <= 100 && texto.length <= 2) {
               resultados.push(num);
             }
           });
         };
 
+        // Varre a página principal
         extrairDeDoc(document);
 
+        // Varre o iframe do provedor do cassino ao vivo
         const frames = document.querySelectorAll('iframe');
         frames.forEach(frame => {
           try {
@@ -73,7 +71,7 @@ async function iniciarRobo() {
         return [...new Set(resultados)];
       });
 
-      console.log(`📊 Números detectados:`, bolas);
+      console.log(`📊 Números detectados na mesa:`, bolas);
 
       if (bolas.length > 0) {
         const payload = {
@@ -87,9 +85,9 @@ async function iniciarRobo() {
           body: JSON.stringify(payload)
         });
 
-        console.log('🚀 Rodada enviada com sucesso! Status:', resposta.status);
+        console.log('🚀 Rodada enviada para a API com sucesso! Status:', resposta.status);
       } else {
-        console.log('⚠️ Nenhum número localizado neste ciclo.');
+        console.log('⚠️ Nenhum número visível neste ciclo. Aguardando próximo sorteio...');
       }
 
     } catch (err) {
