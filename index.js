@@ -2,10 +2,14 @@ const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
 
 const API_URL = 'https://api-luckyball.onrender.com/api/rodada';
+const LOGIN_URL = 'https://www.1pra1.bet.br/login'; 
 const GAME_URL = 'https://www.1pra1.bet.br/cassino-ao-vivo?act=prov%3APTSL&game=420019208&gn=Brazilian+Mega+Fire+Blaze+Lucky+Ball+Live'; 
 
+const USER = process.env.BET_USER;
+const PASS = process.env.BET_PASS;
+
 async function iniciarRobo() {
-  console.log('🤖 Iniciando scraper inteligente na mesa ao vivo...');
+  console.log('🤖 [LOGIN AUTOMÁTICO] Iniciando robô...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -22,49 +26,60 @@ async function iniciarRobo() {
   await page.setViewport({ width: 1366, height: 768 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
-  // Monitora as requisições de rede que o jogo faz para pescar os números direto da fonte
-  page.on('response', async (response) => {
-    try {
-      const url = response.url();
-      if (url.includes('api') || url.includes('game') || url.includes('data') || url.includes('result')) {
-        const contentType = response.headers()['content-type'] || '';
-        if (contentType.includes('application/json')) {
-          const json = await response.json();
-          
-          JSON.stringify(json, (key, value) => {
-            if (Array.isArray(value) && value.length > 0) {
-              const numerosValidos = value.filter(n => typeof n === 'number' && n >= 1 && n <= 100);
-              if (numerosValidos.length >= 3) {
-                console.log('🎯 Dados capturados via requisição da API do jogo:', numerosValidos);
-                
-                // Envia para a sua API no Render
-                fetch(API_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ bolas: numerosValidos, horario: new Date().toISOString() })
-                }).catch(() => {});
-              }
-            }
-            return value;
-          });
-        }
-      }
-    } catch (err) {
-      // Ignora erros de parsing
-    }
-  });
-
   try {
-    console.log('🌐 Conectando à mesa de apostas...');
+    if (!USER || !PASS) {
+      console.error('❌ ERRO CRÍTICO: As variáveis BET_USER ou BET_PASS não foram encontradas no Railway!');
+    }
+
+    console.log('🔐 Acessando página de login...');
+    await page.goto(LOGIN_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+
+    console.log('✍️ Preenchendo credenciais de acesso...');
+    await page.waitForSelector('input[type="email"], input[name="email"], input[id*="email"]', { timeout: 10000 });
+    
+    await page.type('input[type="email"], input[name="email"], input[id*="email"]', USER, { delay: 100 });
+    await page.type('input[type="password"], input[name="password"], input[id*="password"]', PASS, { delay: 100 });
+
+    await page.keyboard.press('Enter');
+    console.log('🚀 Login submetido, aguardando autenticação...');
+    
+    await new Promise(resolve => setTimeout(resolve, 10000));
+
+    console.log('🌐 Entrando na mesa de apostas ao vivo...');
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    console.log('✅ Conexão estabelecida com sucesso!');
+    console.log('✅ Sessão logada com sucesso!');
+
   } catch (e) {
-    console.error('❌ Erro ao carregar a página:', e.message);
+    console.error('❌ Erro durante o processo de login:', e.message);
   }
 
-  setInterval(() => {
-    console.log('🔄 Monitorando tráfego da mesa ao vivo...');
-  }, 30000);
+  setInterval(async () => {
+    try {
+      const numeros = await page.evaluate(() => {
+        const elementos = document.querySelectorAll('.ball, .result-number, .history-item, [class*="number"], [class*="ball"]');
+        const lista = [];
+        elementos.forEach(el => {
+          const txt = el.innerText.trim();
+          const num = parseInt(txt);
+          if (!isNaN(num) && num >= 1 && num <= 100 && !lista.includes(num)) {
+            lista.push(num);
+          }
+        });
+        return lista;
+      });
+
+      if (numeros && numeros.length > 0) {
+        console.log('🎯 Números capturados na mesa logada:', numeros);
+        await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bolas: numeros, horario: new Date().toISOString() })
+        });
+      } else {
+        console.log('🔄 Monitorando rodada ao vivo...');
+      }
+    } czyn => {}
+  }, 10000);
 }
 
 iniciarRobo();
