@@ -1,12 +1,11 @@
 const puppeteer = require('puppeteer');
 const fetch = require('node-fetch');
-const fs = require('fs');
 
 const API_URL = 'https://api-luckyball.onrender.com/api/rodada';
 const GAME_URL = 'https://www.1pra1.bet.br/'; 
 
 async function iniciarRobo() {
-  console.log('🤖 Iniciando scraper no Railway...');
+  console.log('🤖 Iniciando scraper avançado no Railway...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -15,54 +14,69 @@ async function iniciarRobo() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--single-process'
+      '--single-process',
+      '--disable-software-rasterizer'
     ]
   });
 
   const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  await page.setViewport({ width: 1366, height: 768 });
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
   try {
-    console.log('🌐 Acessando URL do jogo...');
+    console.log('🌐 Acessando a página principal...');
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
-    console.log('✅ Página carregada com sucesso!');
-
-    // Aguarda 8 segundos para garantir carregamento de scripts internos
-    await new Promise(r => setTimeout(r, 8000));
-
-    // Salva print e HTML para diagnóstico caso precise
-    await page.screenshot({ path: 'print_jogo.png' });
-    const htmlContent = await page.content();
-    console.log(`📄 Tamanho do HTML carregado: ${htmlContent.length} caracteres`);
-
+    console.log('✅ Página principal carregada!');
   } catch (e) {
-    console.error('❌ Erro ao carregar a página:', e.message);
+    console.error('❌ Erro ao acessar URL:', e.message);
   }
 
-  // Loop de varredura
+  // Loop de varredura a cada 10 segundos
   setInterval(async () => {
     try {
-      console.log('🔍 Varrendo elementos da tela...');
+      console.log('🔍 Varrendo frames e elementos da página...');
 
+      // O Puppeteer vai vasculhar a página principal E dentro de todos os iframes do jogo
       const bolas = await page.evaluate(() => {
-        // Tenta buscar por múltiplos seletores comuns de números em jogos de loteria/sorteio
-        const seletores = '[class*="ball"], [class*="number"], [class*="numero"], [class*="sorteio"]';
-        const elementos = document.querySelectorAll(seletores);
-        
-        if (!elementos || elementos.length === 0) return [];
+        let resultados = [];
 
-        return Array.from(elementos)
-          .map(el => parseInt(el.innerText.trim(), 10))
-          .filter(n => !isNaN(n) && n >= 1 && n <= 60);
+        // Função para extrair números de um documento (seja a página ou iframe)
+        const extrairDeDoc = (doc) => {
+          // Busca por elementos que contenham números ou classes comuns de bolas de sorteio
+          const nodes = doc.querySelectorAll('span, div, p, [class*="ball"], [class*="number"], [class*="numero"]');
+          nodes.forEach(el => {
+            const texto = el.innerText ? el.innerText.trim() : '';
+            const num = parseInt(texto, 10);
+            // Filtra apenas números válidos de sorteio (ex: 1 a 60)
+            if (!isNaN(num) && num >= 1 && num <= 60 && texto.length <= 2) {
+              resultados.push(num);
+            }
+          });
+        };
+
+        // Varre a página principal
+        extrairDeDoc(document);
+
+        // Varre todos os iframes embutidos na página
+        const frames = document.querySelectorAll('iframe');
+        frames.forEach(frame => {
+          try {
+            if (frame.contentDocument) {
+              extrairDeDoc(frame.contentDocument);
+            }
+          } catch (err) {
+            // Ignora iframes cross-origin restritos
+          }
+        });
+
+        return [...new Set(resultados)];
       });
 
-      const bolasUnicas = [...new Set(bolas)];
-      console.log(`📊 Números detectados:`, bolasUnicas);
+      console.log(`📊 Números encontrados na varredura:`, bolas);
 
-      if (bolasUnicas.length > 0) {
+      if (bolas.length > 0) {
         const payload = {
-          bolas: bolasUnicas,
+          bolas: bolas,
           horario: new Date().toISOString()
         };
 
@@ -72,11 +86,13 @@ async function iniciarRobo() {
           body: JSON.stringify(payload)
         });
 
-        console.log('🚀 Rodada enviada com sucesso! Status:', resposta.status);
+        console.log('🚀 Rodada enviada com sucesso para a API! Status:', resposta.status);
+      } else {
+        console.log('⚠️ Nenhum número localizado neste ciclo. Tentando novamente...');
       }
 
     } catch (err) {
-      console.error('❌ Erro no loop:', err.message);
+      console.error('❌ Erro durante o ciclo de varredura:', err.message);
     }
   }, 10000);
 }
