@@ -8,7 +8,7 @@ const USER = process.env.BET_USER;
 const PASS = process.env.BET_PASS;
 
 async function iniciarRobo() {
-  console.log('🤖 [ESTUDO - EXTRATOR DE ALTA PRECISÃO] Iniciando robô...');
+  console.log('🤖 [APP SNIFFER] Conectando ao fluxo de dados da mesa...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -30,7 +30,7 @@ async function iniciarRobo() {
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Tratativa de login caso apareça na página principal
+    // Tentativa automática de login se houver elementos visíveis
     const botoesLogin = await page.$$('button, a');
     for (const btn of botoesLogin) {
       const texto = await page.evaluate(el => el.innerText, btn);
@@ -51,102 +51,80 @@ async function iniciarRobo() {
       await new Promise(resolve => setTimeout(resolve, 8000));
     }
   } catch (e) {
-    console.log('⚠️ Aviso no fluxo de login:', e.message);
+    console.log('⚠️ Aviso no fluxo:', e.message);
   }
 
-  console.log('🚀 Extrator ativo. Monitorando histórico e painel da mesa em tempo real...');
+  // Injeta o gancho na raiz do documento para capturar qualquer WebSocket gerado
+  await page.evaluateOnNewDocument(() => {
+    const OrigWebSocket = window.WebSocket;
+    window.WebSocket = function(url, protocols) {
+      const ws = new OrigWebSocket(url, protocols);
+      ws.addEventListener('message', function(event) {
+        try {
+          // Envia a mensagem do WebSocket capturada para o console do Node
+          console.log('WS_EVENT_RAW:' + event.data);
+        } catch (err) {}
+      });
+      return ws;
+    };
+  });
 
-  // Controle para evitar enviar repetidamente o mesmo sorteio
-  let ultimoEnvioStr = '';
-
-  // Loop de varredura profunda em todos os frames e iframes da página a cada 3 segundos
-  setInterval(async () => {
+  // Expõe função para disparar os dados filtrados para a sua API do Render
+  await page.exposeFunction('enviarParaAPIApp', async (dados) => {
     try {
-      const dadosMesa = await page.evaluate(() => {
-        const resultado = {
-          bolas: [],
-          jackpots: []
-        };
+      console.log('🎯 [ENVIANDO PARA SUA API DO RENDER]:', dados);
+      await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bolas: dados.bolas || [],
+          jackpots: dados.jackpots || [],
+          horario: new Date().toISOString()
+        })
+      });
+    } catch (err) {
+      console.log('❌ Erro de conexão com a API:', err.message);
+    }
+  });
 
-        // Função recursiva para varrer o documento principal e todos os iframes internos
-        function varrerDocumento(doc) {
-          if (!doc) return;
+  // Ouve os logs do console do navegador injetados pelos iframes/páginas
+  page.on('console', async (msg) => {
+    const text = msg.text();
+    if (text.startsWith('WS_EVENT_RAW:')) {
+      const payload = text.replace('WS_EVENT_RAW:', '');
+      
+      try {
+        const lower = payload.toLowerCase();
+        const bolas = [];
+        const jackpots = [];
 
-          // Procura por todos os elementos que possam conter texto de histórico ou números
-          const elementos = doc.querySelectorAll('*');
-          elementos.forEach(el => {
-            // Analisa tanto o texto visível quanto atributos de estilo, aria-labels e classes
-            const textos = [];
-            if (el.innerText) textos.push(el.innerText.trim());
-            if (el.getAttribute && el.getAttribute('aria-label')) textos.push(el.getAttribute('aria-label').trim());
-            if (el.className && typeof el.className === 'string') textos.push(el.className);
+        // Captura prêmios especiais solicitados
+        if (lower.includes('major')) jackpots.push('MAJOR');
+        if (lower.includes('grand')) jackpots.push('GRAND');
+        if (lower.includes('mega')) jackpots.push('MEGA');
 
-            textos.forEach(txt => {
-              const lower = txt.toLowerCase();
-
-              // Detecção de Jackpots
-              if (lower.includes('major') && !resultado.jackpots.includes('MAJOR')) resultado.jackpots.push('MAJOR');
-              if (lower.includes('grand') && !resultado.jackpots.includes('GRAND')) resultado.jackpots.push('GRAND');
-              if (lower.includes('mega') && !resultado.jackpots.includes('MEGA')) resultado.jackpots.push('MEGA');
-
-              // Extração de números de 1 a 100
-              const matches = txt.match(/\b([1-9][0-9]?|100)\b/g);
-              if (matches) {
-                matches.forEach(m => {
-                  const num = parseInt(m);
-                  // Filtra para garantir que está dentro do escopo da roleta/jogo (1 a 100)
-                  if (num >= 1 && num <= 100 && !resultado.bolas.includes(num)) {
-                    resultado.bolas.push(num);
-                  }
-                });
-              }
-            });
-          });
-
-          // Varre sub-iframes recursivamente se existirem
-          const frames = doc.querySelectorAll('iframe');
-          frames.forEach(iframe => {
-            try {
-              const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-              varrerDocumento(iframeDoc);
-            } catch (err) {
-              // Erros de CORS em iframes externos são esperados e ignorados com segurança
+        // Extração de números válidos de bolas da mesa (1 a 100)
+        const matches = payload.match(/\b([1-9][0-9]?|100)\b/g);
+        if (matches) {
+          matches.forEach(m => {
+            const num = parseInt(m);
+            if (num >= 1 && num <= 100 && !bolas.includes(num)) {
+              bolas.push(num);
             }
           });
         }
 
-        varrerDocumento(document);
-        return resultado;
-      });
-
-      // Valida se encontrou dados relevantes
-      if ((dadosMesa.bolas && dadosMesa.bolas.length > 0) || (dadosMesa.jackpots && dadosMesa.jackpots.length > 0)) {
-        // Cria uma assinatura única para evitar spam idêntico consecutivo
-        const assinatura = JSON.stringify(dadosMesa.bolas.sort()) + JSON.stringify(dadosMesa.jackpots.sort());
-
-        if (assinatura !== ultimoEnvioStr) {
-          ultimoEnvioStr = assinatura;
-          console.log('🎯 [NOVO SORTEIO DETECTADO NA MESA]:', dadosMesa);
-
-          // Dispara os dados capturados para a sua API no Render
-          await fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              bolas: dadosMesa.bolas,
-              jackpots: dadosMesa.jackpots,
-              horario: new Date().toISOString()
-            })
-          });
+        // Se houver dados válidos no pacote de rede, despacha para a API
+        if (bolas.length > 0 || jackpots.length > 0) {
+          await page.evaluate((b, j) => {
+            window.enviarParaAPIApp({ bolas: b, jackpots: j });
+          }, bolas, jackpots);
         }
-      } else {
-        console.log('🔄 Monitorando mesa ao vivo (aguardando nova extração)...');
-      }
-
-    } catch (err) {
-      // Mantém o loop de execução ativo em caso de oscilação da página
+      } catch (e) {}
     }
-  }, 3000);
+  });
+
+  console.log('🚀 Sniffer WebSocket de alta performance rodando. Aguardando pacotes do jogo...');
 }
 
 iniciarRobo();
