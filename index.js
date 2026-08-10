@@ -26,13 +26,11 @@ async function iniciarRobo() {
   page.on('response', async (response) => {
     try {
       const url = response.url();
-      // Procura por endpoints de API internos do provedor do jogo
       if (url.includes('api') || url.includes('game') || url.includes('data') || url.includes('result')) {
         const contentType = response.headers()['content-type'] || '';
         if (contentType.includes('application/json')) {
           const json = await response.json();
           
-          // Procura por arrays de números dentro do JSON recebido pelo servidor do jogo
           JSON.stringify(json, (key, value) => {
             if (Array.isArray(value) && value.length > 0) {
               const numerosValidos = value.filter(n => typeof n === 'number' && n >= 1 && n <= 100);
@@ -52,7 +50,7 @@ async function iniciarRobo() {
         }
       }
     } catch (err) {
-      // Ignora erros de parsing de pacotes externos
+      // Ignora erros de parsing
     }
   });
 
@@ -64,7 +62,6 @@ async function iniciarRobo() {
     console.error('❌ Erro ao carregar a página:', e.message);
   }
 
-  // Mantém o navegador rodando e escutando o tráfego indefinidamente
   setInterval(() => {
     console.log('🔄 Monitorando tráfego da mesa ao vivo...');
   }, 30000);
