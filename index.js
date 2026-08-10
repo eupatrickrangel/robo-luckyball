@@ -8,7 +8,7 @@ const USER = process.env.BET_USER;
 const PASS = process.env.BET_PASS;
 
 async function iniciarRobo() {
-  console.log('🤖 [APP SNIFFER] Conectando ao fluxo de dados da mesa...');
+  console.log('🤖 [EXTRATOR DIRETO DE HISTÓRICO] Iniciando...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -30,7 +30,6 @@ async function iniciarRobo() {
     await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Tentativa automática de login se houver elementos visíveis
     const botoesLogin = await page.$$('button, a');
     for (const btn of botoesLogin) {
       const texto = await page.evaluate(el => el.innerText, btn);
@@ -44,87 +43,86 @@ async function iniciarRobo() {
 
     const inputs = await page.$$('input');
     if (inputs.length >= 2 && USER && PASS) {
-      console.log('✍️ Injetando credenciais de acesso...');
+      console.log('✍️ Injetando credenciais...');
       await inputs[0].type(USER, { delay: 50 });
       if (inputs[1]) await inputs[1].type(PASS, { delay: 50 });
       await page.keyboard.press('Enter');
       await new Promise(resolve => setTimeout(resolve, 8000));
     }
   } catch (e) {
-    console.log('⚠️ Aviso no fluxo:', e.message);
+    console.log('⚠️ Aviso no login:', e.message);
   }
 
-  // Injeta o gancho na raiz do documento para capturar qualquer WebSocket gerado
-  await page.evaluateOnNewDocument(() => {
-    const OrigWebSocket = window.WebSocket;
-    window.WebSocket = function(url, protocols) {
-      const ws = new OrigWebSocket(url, protocols);
-      ws.addEventListener('message', function(event) {
-        try {
-          // Envia a mensagem do WebSocket capturada para o console do Node
-          console.log('WS_EVENT_RAW:' + event.data);
-        } catch (err) {}
-      });
-      return ws;
-    };
-  });
+  console.log('🚀 Varredura contínua de histórico ativada.');
+  let ultimaAssinatura = '';
 
-  // Expõe função para disparar os dados filtrados para a sua API do Render
-  await page.exposeFunction('enviarParaAPIApp', async (dados) => {
+  setInterval(async () => {
     try {
-      console.log('🎯 [ENVIANDO PARA SUA API DO RENDER]:', dados);
-      await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          bolas: dados.bolas || [],
-          jackpots: dados.jackpots || [],
-          horario: new Date().toISOString()
-        })
-      });
-    } catch (err) {
-      console.log('❌ Erro de conexão com a API:', err.message);
-    }
-  });
+      // Varre o documento principal e todos os iframes internos buscando nós de texto de histórico
+      const dadosExtraidos = await page.evaluate(() => {
+        const resultado = { bolas: [], jackpots: [] };
 
-  // Ouve os logs do console do navegador injetados pelos iframes/páginas
-  page.on('console', async (msg) => {
-    const text = msg.text();
-    if (text.startsWith('WS_EVENT_RAW:')) {
-      const payload = text.replace('WS_EVENT_RAW:', '');
-      
-      try {
-        const lower = payload.toLowerCase();
-        const bolas = [];
-        const jackpots = [];
+        function inspecionarDoc(doc) {
+          if (!doc) return;
 
-        // Captura prêmios especiais solicitados
-        if (lower.includes('major')) jackpots.push('MAJOR');
-        if (lower.includes('grand')) jackpots.push('GRAND');
-        if (lower.includes('mega')) jackpots.push('MEGA');
+          // Busca elementos comuns de histórico, lista de bolas e painéis de jackpots
+          const elementos = doc.querySelectorAll('li, div, span, [class*="history"], [class*="ball"], [class*="number"], [class*="jackpot"], [class*="win"]');
+          elementos.forEach(el => {
+            const texto = (el.innerText || el.getAttribute('aria-label') || '').trim();
+            if (!texto) return;
 
-        // Extração de números válidos de bolas da mesa (1 a 100)
-        const matches = payload.match(/\b([1-9][0-9]?|100)\b/g);
-        if (matches) {
-          matches.forEach(m => {
-            const num = parseInt(m);
-            if (num >= 1 && num <= 100 && !bolas.includes(num)) {
-              bolas.push(num);
+            const lower = texto.toLowerCase();
+            if (lower.includes('major') && !resultado.jackpots.includes('MAJOR')) resultado.jackpots.push('MAJOR');
+            if (lower.includes('grand') && !resultado.jackpots.includes('GRAND')) resultado.jackpots.push('GRAND');
+            if (lower.includes('mega') && !resultado.jackpots.includes('MEGA')) resultado.jackpots.push('MEGA');
+
+            // Captura números do histórico (1 a 100)
+            const numeros = texto.match(/\b([1-9][0-9]?|100)\b/g);
+            if (numeros) {
+              numeros.forEach(n => {
+                const numVal = parseInt(n);
+                if (numVal >= 1 && numVal <= 100 && !resultado.bolas.includes(numVal)) {
+                  resultado.bolas.push(numVal);
+                }
+              });
             }
+          });
+
+          // Varre iframes internos
+          const frames = doc.querySelectorAll('iframe');
+          frames.forEach(fr => {
+            try {
+              inspecionarDoc(fr.contentDocument || fr.contentWindow.document);
+            } catch (err) {}
           });
         }
 
-        // Se houver dados válidos no pacote de rede, despacha para a API
-        if (bolas.length > 0 || jackpots.length > 0) {
-          await page.evaluate((b, j) => {
-            window.enviarParaAPIApp({ bolas: b, jackpots: j });
-          }, bolas, jackpots);
-        }
-      } catch (e) {}
-    }
-  });
+        inspecionarDoc(document);
+        return resultado;
+      });
 
-  console.log('🚀 Sniffer WebSocket de alta performance rodando. Aguardando pacotes do jogo...');
+      if (dadosExtraidos.bolas.length > 0 || dadosExtraidos.jackpots.length > 0) {
+        const assinaturaAtual = JSON.stringify(dadosExtraidos.bolas) + JSON.stringify(dadosExtraidos.jackpots);
+
+        if (assinaturaAtual !== ultimaAssinatura) {
+          ultimaAssinatura = assinaturaAtual;
+          console.log('🎯 [DADOS CAPTURADOS DA MESA]:', dadosExtraidos);
+
+          await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              bolas: dadosExtraidos.bolas,
+              jackpots: dadosExtraidos.jackpots,
+              horario: new Date().toISOString()
+            })
+          });
+        }
+      } else {
+        console.log('🔄 Aguardando sorteio na mesa...');
+      }
+    } catch (err) {}
+  }, 4000);
 }
 
 iniciarRobo();
