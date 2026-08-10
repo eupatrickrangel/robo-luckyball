@@ -8,7 +8,7 @@ const USER = process.env.BET_USER;
 const PASS = process.env.BET_PASS;
 
 async function iniciarRobo() {
-  console.log('🤖 [ROBÔ INTELIGENTE] Iniciando captura de números e jackpots...');
+  console.log('🤖 [ROBÔ AVANÇADO] Iniciando extração profunda de elementos...');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -53,10 +53,10 @@ async function iniciarRobo() {
     }
 
   } catch (e) {
-    console.log('⚠️ Aviso no fluxo:', e.message);
+    console.log('⚠️ Aviso no fluxo de sessão:', e.message);
   }
 
-  // Monitoramento contínuo da mesa ao vivo
+  // Monitoramento contínuo buscando em todos os atributos e elementos possíveis
   setInterval(async () => {
     try {
       const dadosCapturados = await page.evaluate(() => {
@@ -65,40 +65,42 @@ async function iniciarRobo() {
           jackpots: []
         };
 
-        // Varre todos os elementos de texto da página para achar números e jackpots
-        const elementos = document.querySelectorAll('*');
-        elementos.forEach(el => {
-          // Garante que pega apenas elementos folha (sem filhos) para evitar duplicação
-          if (el.children.length === 0 && el.innerText) {
-            const txt = el.innerText.trim();
+        // Varre absolutamente tudo na página (incluindo atributos de texto ocultos e aria-labels)
+        const todosElementos = document.querySelectorAll('*');
+        todosElementos.forEach(el => {
+          // Coleta textos visíveis e atributos que possam guardar o número da bola
+          const textosParaVerificar = [];
+          if (el.innerText) textosParaVerificar.push(el.innerText.trim());
+          if (el.getAttribute('aria-label')) textosParaVerificar.push(el.getAttribute('aria-label').trim());
+          if (el.className && typeof el.className === 'string') textosParaVerificar.push(el.className);
+
+          textosParaVerificar.forEach(txt => {
             const txtLower = txt.toLowerCase();
 
-            // Identifica Jackpots
-            if (txtLower.includes('major') && !resultado.jackpots.includes('MAJOR')) {
-              resultado.jackpots.push('MAJOR');
-            }
-            if (txtLower.includes('grand') && !resultado.jackpots.includes('GRAND')) {
-              resultado.jackpots.push('GRAND');
-            }
-            if (txtLower.includes('mega') && !resultado.jackpots.includes('MEGA')) {
-              resultado.jackpots.push('MEGA');
-            }
+            // Jackpots
+            if (txtLower.includes('major') && !resultado.jackpots.includes('MAJOR')) resultado.jackpots.push('MAJOR');
+            if (txtLower.includes('grand') && !resultado.jackpots.includes('GRAND')) resultado.jackpots.push('GRAND');
+            if (txtLower.includes('mega') && !resultado.jackpots.includes('MEGA')) resultado.jackpots.push('MEGA');
 
-            // Identifica Números das bolas (1 a 100)
-            const num = parseInt(txt);
-            if (!isNaN(num) && num >= 1 && num <= 100 && !resultado.bolas.includes(num)) {
-              resultado.bolas.push(num);
+            // Extrai números isolados ou de classes (ex: ball-54, number_12)
+            const matches = txt.match(/\d+/g);
+            if (matches) {
+              matches.forEach(m => {
+                const num = parseInt(m);
+                if (num >= 1 && num <= 100 && !resultado.bolas.includes(num)) {
+                  resultado.bolas.push(num);
+                }
+              });
             }
-          }
+          });
         });
 
         return resultado;
       });
 
       if ((dadosCapturados.bolas && dadosCapturados.bolas.length > 0) || (dadosCapturados.jackpots && dadosCapturados.jackpots.length > 0)) {
-        console.log('🎯 Dados detectados na mesa:', dadosCapturados);
+        console.log('🎯 Dados capturados com sucesso:', dadosCapturados);
         
-        // Envia para a sua API do Render
         await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -109,12 +111,12 @@ async function iniciarRobo() {
           })
         });
       } else {
-        console.log('🔄 Monitorando rodada ao vivo (aguardando sorteio)...');
+        console.log('🔄 Monitorando rodada ao vivo (analisando elementos)...');
       }
     } catch (err) {
-      // Mantém o loop rodando sem travar
+      // Ignora pequenos erros de ciclo para manter rodando
     }
-  }, 8000);
+  }, 6000);
 }
 
 iniciarRobo();
